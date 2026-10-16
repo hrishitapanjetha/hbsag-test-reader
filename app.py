@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import os
 import tempfile
 import zipfile
@@ -7,11 +8,16 @@ import zipfile
 import streamlit as st
 
 from pipeline import HBsAgPipeline, draw_final
-from report import DISCLAIMER, annotated_jpeg, build_docx, build_pdf, results_frame, summary_counts
+from report import DISCLAIMER, annotated_jpeg, build_docx, build_pdf, hw_text, results_frame, summary_counts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_WEIGHTS = os.path.join(HERE, "hbsag_model_v2.pt")
-SAMPLES = sorted(glob.glob(os.path.join(HERE, "samples", "*.*")))
+SAMPLE_DIR = os.path.join(HERE, "samples")
+SAMPLES = sorted(f for f in glob.glob(os.path.join(SAMPLE_DIR, "*.*")) if f.lower().endswith((".jpg", ".jpeg", ".png")))
+try:
+    SAMPLE_NOTES = json.load(open(os.path.join(SAMPLE_DIR, "samples.json")))
+except Exception:
+    SAMPLE_NOTES = {}
 
 st.set_page_config(page_title="HBsAg Test Reader", page_icon="🧪", layout="wide")
 
@@ -48,21 +54,33 @@ if not os.path.exists(weights):
     st.error(f"Model weights not found at {weights}")
     st.stop()
 
-uploads = st.file_uploader("Upload test photographs", type=["jpg", "jpeg", "png", "jfif", "webp", "bmp"], accept_multiple_files=True)
-use_samples = False
-if SAMPLES:
-    use_samples = st.checkbox(f"Use the {len(SAMPLES)} sample photographs instead", value=False)
+tab_demo, tab_upload = st.tabs(["Try the sample photographs", "Upload your own photographs"])
+run_items = None
 
-items = []
-if use_samples:
-    items = [(os.path.basename(f), open(f, "rb").read()) for f in SAMPLES]
-elif uploads:
-    items = [(u.name, u.getvalue()) for u in uploads]
+with tab_demo:
+    if SAMPLES:
+        st.write("No photographs to hand? Pick some of the sample photographs below and press Analyse to see how the tool works.")
+        names = [os.path.basename(f) for f in SAMPLES]
+        default = [n for n in ("509341479.jpg", "302237023.jpg", "468319602.jpeg") if n in names] or names[:3]
+        chosen = st.multiselect("Sample photographs", names, default=default, help="Choose one or more.")
+        cols = st.columns(3)
+        for k, n in enumerate(chosen):
+            with cols[k % 3]:
+                st.image(os.path.join(SAMPLE_DIR, n), caption=f"{n}: {SAMPLE_NOTES.get(n, '')}", use_container_width=True)
+        if st.button(f"Analyse {len(chosen)} sample photograph(s)", type="primary", disabled=not chosen, key="run_demo"):
+            run_items = [(n, open(os.path.join(SAMPLE_DIR, n), "rb").read()) for n in chosen]
+    else:
+        st.info("No sample photographs are available in this copy of the app.")
 
-if len(items) > 40:
-    st.warning("More than 40 photographs selected. Processing may be slow, so consider running them in smaller batches.")
+with tab_upload:
+    uploads = st.file_uploader("Upload test photographs", type=["jpg", "jpeg", "png", "jfif", "webp", "bmp"], accept_multiple_files=True)
+    if len(uploads) > 40:
+        st.warning("More than 40 photographs selected. Processing may be slow, so consider running them in smaller batches.")
+    if st.button(f"Analyse {len(uploads)} photograph(s)" if uploads else "Analyse", type="primary", disabled=not uploads, key="run_upload"):
+        run_items = [(u.name, u.getvalue()) for u in uploads]
 
-run = st.button(f"Analyse {len(items)} photograph(s)" if items else "Analyse", type="primary", disabled=not items)
+items = run_items or []
+run = bool(items)
 
 if run:
     p = load_pipeline(weights)
@@ -124,7 +142,7 @@ if results:
             right.markdown(f"**Result:** {x['photo_result'].upper()}")
             right.markdown(f"**Devices:** {x['n_devices']} ({', '.join(d.upper() for d in x['device_results']) or 'none found'})")
             right.markdown(f"**Specimen ID (barcode):** {x['specimen_id'] or 'not read'}")
-            right.markdown(f"**Handwritten ID:** {x['hw_digits'] or 'none read'}")
+            right.markdown(f"**Handwritten ID:** {hw_text(x)}")
             right.markdown(f"**Test type:** {x['test_type']}")
             for reason in x["reasons"]:
                 right.warning(reason)

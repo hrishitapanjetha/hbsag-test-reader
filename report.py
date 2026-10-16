@@ -7,6 +7,12 @@ import cv2
 import pandas as pd
 from PIL import Image
 
+def hw_text(x):
+    if x["hw_digits"]:
+        return x["hw_digits"]
+    return "none read" if x.get("hw_enabled") else "not read (handwriting reader switched off)"
+
+
 DISCLAIMER = ("This report was produced by an AI-assisted image reading tool. It is intended to support, not replace, "
               "reading by trained laboratory staff. Every result must be confirmed by a person before it is used. "
               "It is not a clinical validation or an authorization for autonomous diagnostic use.")
@@ -32,7 +38,7 @@ def results_frame(results):
             "Devices": x["n_devices"],
             "Device results": ", ".join(x["device_results"]),
             "Specimen ID (barcode)": x["specimen_id"] or "not read",
-            "Handwritten ID": x["hw_digits"] or "none",
+            "Handwritten ID": hw_text(x),
             "Test type": x["test_type"],
             "Needs review": "Yes" if x["needs_review"] else "No",
             "Notes": " ".join(x["reasons"]),
@@ -108,7 +114,9 @@ def build_docx(results, title="HBsAg Rapid Test Photograph Report", operator="")
         run = p.add_run(f"2.{k} {r['name']}: {x['photo_result'].upper()}")
         run.bold = True
         p.paragraph_format.keep_with_next = True
-        doc.add_picture(io.BytesIO(r["jpeg"]), width=Inches(5.6))
+        im = Image.open(io.BytesIO(r["jpeg"]))
+        k = min(5.6 / im.width, 4.6 / im.height)
+        doc.add_picture(io.BytesIO(r["jpeg"]), width=Inches(im.width * k), height=Inches(im.height * k))
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
         doc.paragraphs[-1].paragraph_format.keep_with_next = True
         t = doc.add_table(rows=0, cols=2)
@@ -116,7 +124,7 @@ def build_docx(results, title="HBsAg Rapid Test Photograph Report", operator="")
         facts = [("Devices in the photograph", str(x["n_devices"])),
                  ("Device results", ", ".join(d.upper() for d in x["device_results"]) or "none found"),
                  ("Specimen ID from barcode", (x["specimen_id"] + (f" ({x['specimen_id_source']})" if x["specimen_id_source"] else "")) if x["specimen_id"] else "not read"),
-                 ("Handwritten ID", x["hw_digits"] or "none read"),
+                 ("Handwritten ID", hw_text(x)),
                  ("Test type", x["test_type"]),
                  ("Needs review", "Yes" if x["needs_review"] else "No")]
         for a, b in facts:
@@ -169,13 +177,13 @@ def build_pdf(results, title="HBsAg Rapid Test Photograph Report", operator=""):
     story += [t, Paragraph("2. Photograph Details", h1)]
     for k, r in enumerate(results, 1):
         x = r["row"]
-        w = 6.2 * inch
         im = Image.open(io.BytesIO(r["jpeg"]))
-        img = RLImage(io.BytesIO(r["jpeg"]), width=w, height=w * im.height / im.width)
+        k = min(6.2 * inch / im.width, 4.6 * inch / im.height)
+        img = RLImage(io.BytesIO(r["jpeg"]), width=im.width * k, height=im.height * k)
         facts = [["Devices in the photograph", str(x["n_devices"])],
                  ["Device results", ", ".join(d.upper() for d in x["device_results"]) or "none found"],
                  ["Specimen ID from barcode", (x["specimen_id"] + (f" ({x['specimen_id_source']})" if x["specimen_id_source"] else "")) if x["specimen_id"] else "not read"],
-                 ["Handwritten ID", x["hw_digits"] or "none read"], ["Test type", x["test_type"]], ["Needs review", "Yes" if x["needs_review"] else "No"]]
+                 ["Handwritten ID", hw_text(x)], ["Test type", x["test_type"]], ["Needs review", "Yes" if x["needs_review"] else "No"]]
         ft = Table(facts, colWidths=[2.4 * inch, 3.8 * inch])
         ft.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#999999")), ("FONTNAME", (0, 0), (0, -1), "Times-Bold"),
                                 ("FONTNAME", (1, 0), (1, -1), "Times-Roman"), ("FONTSIZE", (0, 0), (-1, -1), 9.5)]))
