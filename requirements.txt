@@ -1,0 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+streamlit>=1.40
+ultralytics>=8.3
+torch
+torchvision
+transformers
+easyocr
+pyzbar
+opencv-python-headless
+pillow
+pandas
+numpy
+python-docx
+reportlab
