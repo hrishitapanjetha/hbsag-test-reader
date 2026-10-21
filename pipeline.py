@@ -358,6 +358,7 @@ class HBsAgPipeline:
             hw_raw=ids["hw_raw"], hw_digits=ids["hw_digits"], hw_conf=ids["hw_conf"],
             tt_text=ids["tt_text"], tt_score=ids["tt_score"],
             test_type="HBsAg" if ids["tt_score"] >= 0.7 else "not confirmed",
+            hw_enabled=bool(read_ids and use_handwriting and self.trocr is not None),
             ids_match=bool(ids["barcode_id"] and ids["barcode_id"] == ids["hw_digits"]),
             needs_review=bool(reasons),
             hard_review=hard,

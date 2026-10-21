@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import os
 import tempfile
 import zipfile
@@ -7,11 +8,16 @@ import zipfile
 import streamlit as st
 
 from pipeline import HBsAgPipeline, draw_final
-from report import DISCLAIMER, annotated_jpeg, build_docx, build_pdf, results_frame, summary_counts
+from report import DISCLAIMER, annotated_jpeg, build_docx, build_pdf, hw_text, results_frame, summary_counts
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_WEIGHTS = os.path.join(HERE, "hbsag_model_v2.pt")
-SAMPLES = sorted(glob.glob(os.path.join(HERE, "samples", "*.*")))
+SAMPLE_DIR = os.path.join(HERE, "samples")
+SAMPLES = sorted(f for f in glob.glob(os.path.join(SAMPLE_DIR, "*.*")) if f.lower().endswith((".jpg", ".jpeg", ".png")))
+try:
+    SAMPLE_NOTES = json.load(open(os.path.join(SAMPLE_DIR, "samples.json")))
+except Exception:
+    SAMPLE_NOTES = {}
 
 st.set_page_config(page_title="HBsAg Test Reader", page_icon="🧪", layout="wide")
 
@@ -21,13 +27,11 @@ def load_pipeline(weights):
     return HBsAgPipeline(weights, load_readers=False)
 
 
-ON_CLOUD = os.path.exists("/mount/src") or os.environ.get("HOME") == "/home/adminuser"
-
-
-def ensure_readers(p, handwriting):
-    if p.reader is None or (handwriting and p.trocr is None):
-        with st.spinner("Loading the text readers (first run only)..."):
-            p._load_readers(easyocr_reader=True, handwriting=handwriting)
+@st.cache_resource(show_spinner="Loading the text readers (first run only, this can take a minute)...")
+def load_readers(weights):
+    p = load_pipeline(weights)
+    p._load_readers(easyocr_reader=True, handwriting=True)
+    return p
 
 
 st.title("HBsAg Rapid Test Reader")
@@ -38,8 +42,6 @@ with st.sidebar:
     weights = st.text_input("Model weights", DEFAULT_WEIGHTS)
     conf = st.slider("Detection confidence", 0.10, 0.60, 0.25, 0.05, help="Lower finds more faint lines but may add false detections.")
     rule = st.selectbox("Photo with two devices", ["any_positive", "all_positive"], format_func=lambda x: "Positive if either device is positive" if x == "any_positive" else "Positive only if both devices are positive")
-    read_ids = st.checkbox("Read barcode and test type", value=True, help="Reads the barcode and the printed test name. Slower, especially on the first run.")
-    use_hw = st.checkbox("Also read handwritten ID", value=not ON_CLOUD, disabled=not read_ids, help="Uses a larger model and needs more memory. Handwriting reading is the least reliable part, so it is only a secondary check.")
     operator = st.text_input("Prepared by (optional)")
     st.divider()
     st.caption(DISCLAIMER)
@@ -48,27 +50,37 @@ if not os.path.exists(weights):
     st.error(f"Model weights not found at {weights}")
     st.stop()
 
-uploads = st.file_uploader("Upload test photographs", type=["jpg", "jpeg", "png", "jfif", "webp", "bmp"], accept_multiple_files=True)
-use_samples = False
-if SAMPLES:
-    use_samples = st.checkbox(f"Use the {len(SAMPLES)} sample photographs instead", value=False)
+tab_demo, tab_upload = st.tabs(["Try the sample photographs", "Upload your own photographs"])
+run_items = None
 
-items = []
-if use_samples:
-    items = [(os.path.basename(f), open(f, "rb").read()) for f in SAMPLES]
-elif uploads:
-    items = [(u.name, u.getvalue()) for u in uploads]
+with tab_demo:
+    if SAMPLES:
+        st.write("No photographs to hand? Pick some of the sample photographs below and press Analyse to see how the tool works.")
+        names = [os.path.basename(f) for f in SAMPLES]
+        default = [n for n in ("509341479.jpg", "302237023.jpg", "468319602.jpeg") if n in names] or names[:3]
+        chosen = st.multiselect("Sample photographs", names, default=default, help="Choose one or more.")
+        cols = st.columns(3)
+        for k, n in enumerate(chosen):
+            with cols[k % 3]:
+                st.image(os.path.join(SAMPLE_DIR, n), caption=f"{n}: {SAMPLE_NOTES.get(n, '')}", width="stretch")
+        if st.button(f"Analyse {len(chosen)} sample photograph(s)", type="primary", disabled=not chosen, key="run_demo"):
+            run_items = [(n, open(os.path.join(SAMPLE_DIR, n), "rb").read()) for n in chosen]
+    else:
+        st.info("No sample photographs are available in this copy of the app.")
 
-if len(items) > 40:
-    st.warning("More than 40 photographs selected. Processing may be slow, so consider running them in smaller batches.")
+with tab_upload:
+    uploads = st.file_uploader("Upload test photographs", type=["jpg", "jpeg", "png", "jfif", "webp", "bmp"], accept_multiple_files=True)
+    if len(uploads) > 40:
+        st.warning("More than 40 photographs selected. Processing may be slow, so consider running them in smaller batches.")
+    if st.button(f"Analyse {len(uploads)} photograph(s)" if uploads else "Analyse", type="primary", disabled=not uploads, key="run_upload"):
+        run_items = [(u.name, u.getvalue()) for u in uploads]
 
-run = st.button(f"Analyse {len(items)} photograph(s)" if items else "Analyse", type="primary", disabled=not items)
+items = run_items or []
+run = bool(items)
 
 if run:
-    p = load_pipeline(weights)
+    p = load_readers(weights)
     p.conf, p.photo_rule = conf, rule
-    if read_ids:
-        ensure_readers(p, use_hw)
     results = []
     bar = st.progress(0.0, text="Starting...")
     tmp = tempfile.mkdtemp()
@@ -78,7 +90,7 @@ if run:
         with open(path, "wb") as fh:
             fh.write(data)
         try:
-            row, ex = p.process(path, read_ids=read_ids, use_handwriting=use_hw)
+            row, ex = p.process(path)
             rgb = draw_final(ex["image"], ex)
             results.append(dict(name=name, row=row, rgb=rgb, jpeg=annotated_jpeg(rgb)))
         except Exception as e:
@@ -100,7 +112,7 @@ if results:
         st.warning(f"{c['review']} photograph(s) need a person to check them. They are marked below.")
 
     st.subheader("Results")
-    st.dataframe(results_frame(results), use_container_width=True, hide_index=True)
+    st.dataframe(results_frame(results), width="stretch", hide_index=True)
 
     st.subheader("Report")
     op = st.session_state.get("operator", "")
@@ -120,11 +132,11 @@ if results:
         flag = " (needs review)" if x["needs_review"] else ""
         with st.expander(f"{r['name']}: {x['photo_result'].upper()}{flag}", expanded=len(results) <= 2):
             left, right = st.columns([2, 1])
-            left.image(r["rgb"], use_container_width=True)
+            left.image(r["rgb"], width="stretch")
             right.markdown(f"**Result:** {x['photo_result'].upper()}")
             right.markdown(f"**Devices:** {x['n_devices']} ({', '.join(d.upper() for d in x['device_results']) or 'none found'})")
             right.markdown(f"**Specimen ID (barcode):** {x['specimen_id'] or 'not read'}")
-            right.markdown(f"**Handwritten ID:** {x['hw_digits'] or 'none read'}")
+            right.markdown(f"**Handwritten ID:** {hw_text(x)}")
             right.markdown(f"**Test type:** {x['test_type']}")
             for reason in x["reasons"]:
                 right.warning(reason)

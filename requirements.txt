@@ -1,5 +1,5 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
-streamlit>=1.40
+streamlit>=1.50
 ultralytics>=8.3
 torch
 torchvision

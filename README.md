@@ -11,7 +11,7 @@ The app opens at http://localhost:8501. The first run downloads the handwriting 
 
 ## Files
 
-- app.py: the Streamlit interface
+- app.py: the Streamlit interface (always reads the barcode, handwritten ID and test type)
 - pipeline.py: detection, result logic and reading (the same logic as the evaluated notebook)
 - report.py: Word and PDF report builders
 - hbsag_model_v2.pt: updated detection model
